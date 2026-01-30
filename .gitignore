@@ -58,3 +58,4 @@ ui_*.h
 
 # JetBrains
 .idea
+/components/arduino/

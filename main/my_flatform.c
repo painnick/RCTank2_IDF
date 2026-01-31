@@ -23,6 +23,7 @@
 #define AXIS_DEADZONE           60
 #define MOUNT_DEG_STEP          3
 #define DEBOUNCE_MS             100
+#define HEADLIGHT_DEBOUNCE_MS   400    /* 헤드라이트 토글 최소 간격 (둔감) */
 #define GUN_FIRE_MS             200    /* 포신 LED/서보 유지 시간 */
 #define GUN_DELAY_MS             500    /* 포신: MP3 재생 요청 후 서보/LED/럼블 지연 (DFPlayer 지연 보정) */
 #define MG_FIRE_MS              1000   /* 기관총 발사 시간 (LED 깜빡임) */
@@ -283,9 +284,9 @@ static void my_platform_on_controller_data(uni_hid_device_t* d, uni_controller_t
         }
     }
 
-    /* Y: 헤드라이트 토글 (100ms 간격) */
+    /* Y: 헤드라이트 토글 (눌렀을 때 한 번만, 최소 400ms 간격) */
     if (gp->buttons & BUTTON_Y) {
-        if (now_ms - last_y_ms >= DEBOUNCE_MS) {
+        if (!(prev_buttons & BUTTON_Y) && (now_ms - last_y_ms >= HEADLIGHT_DEBOUNCE_MS)) {
             last_y_ms = now_ms;
             int on = !rctank_led_headlight_get();
             rctank_led_headlight_set(on);

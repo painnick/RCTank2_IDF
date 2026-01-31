@@ -24,13 +24,6 @@ int app_main(void) {
     // If you enable HCI Dump better to disable "Bluepad32 USB Console" from "idf.py menuconfig".
     // hci_dump_init(hci_dump_embedded_stdout_get_instance());
 
-    // Don't use BTstack buffered UART. It conflicts with the console.
-#ifdef CONFIG_ESP_CONSOLE_UART
-#ifndef CONFIG_BLUEPAD32_USB_CONSOLE_ENABLE
-    btstack_stdio_init();
-#endif  // CONFIG_BLUEPAD32_USB_CONSOLE_ENABLE
-#endif  // CONFIG_ESP_CONSOLE_UART
-
     // Configure BTstack for ESP32 VHCI Controller
     btstack_init();
 

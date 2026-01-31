@@ -215,7 +215,6 @@ static uni_error_t my_platform_on_device_ready(uni_hid_device_t* d)
     my_platform_instance_t* ins = get_my_platform_instance(d);
     ins->gamepad_seat = GAMEPAD_SEAT_A;
 
-    rctank_dfplayer_stop();
     rctank_dfplayer_play(RCTANK_DFPLAYER_TRACK_CONNECT);
     trigger_event_on_gamepad(d);
     if (d->report_parser.play_dual_rumble != NULL)

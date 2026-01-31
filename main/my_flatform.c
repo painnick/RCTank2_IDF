@@ -8,7 +8,6 @@
 #include "controller/uni_controller.h"
 #include "controller/uni_gamepad.h"
 
-
 #include "driver/gpio.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -21,7 +20,6 @@
 #include "rctank_servo.h"
 #include "rctank_storage.h"
 
-
 #define AXIS_DEADZONE 60
 #define MOUNT_DEG_STEP 3
 #define DEBOUNCE_MS 100
@@ -32,6 +30,7 @@
 #define MG_LED_BLINK_MS 75        /* 기관총 LED 깜빡임 주기 */
 #define MG_DELAY_MS 500           /* 기관총: MP3 재생 요청 후 LED/럼블 지연 (DFPlayer 지연 보정) */
 #define SELECT_START_HOLD_MS 3000
+#define RECOIL_POWER 1024 /* 반동 속도 (최대) */
 
 typedef struct my_platform_instance_s {
     uni_gamepad_seat_t gamepad_seat;
@@ -45,6 +44,7 @@ static int64_t last_y_ms = 0;
 static int64_t last_l1_ms = 0;
 static int64_t last_r1_ms = 0;
 static int64_t select_start_pressed_at = 0;
+static int64_t recoil_end_time = 0; /* 반동 종료 시간 */
 static uint8_t prev_buttons = 0;
 static uint8_t prev_misc = 0;
 static esp_timer_handle_t gun_timer = NULL;
@@ -61,11 +61,24 @@ static void gun_fire_timer_cb(void* arg) {
     (void)arg;
     rctank_led_gun_set(0);
     rctank_servo_gun_set_degree(RCTANK_SERVO_GUN_DEG_REST);
+
 }
 
 /* 포신: MP3 재생 요청 후 500ms 지난 뒤 서보/LED/럼블 시작 (DFPlayer 지연 보정) */
 static void gun_delayed_start_cb(void* arg) {
     (void)arg;
+
+    /* 반동 시작 */
+    int64_t now_ms = esp_timer_get_time() / 1000;
+    recoil_end_time = now_ms + GUN_DELAY_MS;
+    rctank_motor_left_track_set(-RECOIL_POWER);
+    rctank_motor_right_track_set(-RECOIL_POWER);
+
+    vTaskDelay(pdMS_TO_TICKS(300));
+
+    rctank_motor_left_track_set(0);
+    rctank_motor_right_track_set(0);
+
     uni_hid_device_t* d = gun_delayed_device;
     gun_delayed_device = NULL;
     rctank_led_gun_set(1);
@@ -213,9 +226,6 @@ static uni_error_t my_platform_on_device_ready(uni_hid_device_t* d) {
     my_platform_instance_t* ins = get_my_platform_instance(d);
     ins->gamepad_seat = GAMEPAD_SEAT_A;
 
-    // rctank_dfplayer_stop();
-    // vTaskDelay(pdMS_TO_TICKS(100));
-
     rctank_dfplayer_play(RCTANK_DFPLAYER_TRACK_CONNECT);
     trigger_event_on_gamepad(d);
     if (d->report_parser.play_dual_rumble != NULL)
@@ -245,6 +255,7 @@ static void my_platform_on_controller_data(uni_hid_device_t* d, uni_controller_t
         ly = 0;
     if (ry > -AXIS_DEADZONE && ry < AXIS_DEADZONE)
         ry = 0;
+
     rctank_motor_left_track_set(-ly);
     rctank_motor_right_track_set(-ry);
 
@@ -274,6 +285,7 @@ static void my_platform_on_controller_data(uni_hid_device_t* d, uni_controller_t
     if (gp->buttons & BUTTON_B) {
         if (!(prev_buttons & BUTTON_B)) {
             rctank_dfplayer_play(RCTANK_DFPLAYER_TRACK_GUN);
+
             gun_delayed_device = d;
             esp_timer_stop(gun_delayed_start_timer);
             esp_timer_start_once(gun_delayed_start_timer, GUN_DELAY_MS * 1000);

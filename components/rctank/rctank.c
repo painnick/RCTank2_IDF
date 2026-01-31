@@ -10,6 +10,8 @@
 #include "rctank_storage.h"
 
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *TAG = "rctank";
 
@@ -36,7 +38,10 @@ esp_err_t rctank_init(void)
 
     uint8_t vol = rctank_storage_volume_get();
     rctank_dfplayer_set_volume(vol);
+    vTaskDelay(pdMS_TO_TICKS(200));
+
     rctank_dfplayer_play(RCTANK_DFPLAYER_TRACK_IDLE);
+    vTaskDelay(pdMS_TO_TICKS(200));
 
     ESP_LOGI(TAG, "rctank init complete (vol=%u)", (unsigned)vol);
     return ESP_OK;

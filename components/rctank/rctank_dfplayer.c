@@ -1,6 +1,7 @@
 /**
  * @file rctank_dfplayer.c
- * @brief DFPlayer Mini UART 프로토콜 (ESP-IDF driver/uart)
+ * @brief DFPlayer Mini UART 제어 (DFPlayerMini_Fast 프로토콜 기준)
+ * @see https://github.com/PowerBroker2/DFPlayerMini_Fast
  */
 #include "rctank_dfplayer.h"
 #include "rctank_pins.h"
@@ -13,33 +14,91 @@
 static const char *TAG = "rctank_dfplayer";
 
 #define UART_NUM            UART_NUM_1
-#define UART_BAUD            9600
-#define UART_BUF_SIZE        256
-#define DFPLAYER_CMD_LEN     10
+#define UART_BAUD           9600
+#define UART_BUF_SIZE       256
 
-static uint16_t dfplayer_checksum(uint8_t *buf, int len)
+/* DFPlayerMini_Fast 패킷 상수 (dfplayer namespace) */
+#define DFPLAYER_SB          0x7E
+#define DFPLAYER_VER        0xFF
+#define DFPLAYER_LEN        0x06
+#define DFPLAYER_NO_FEEDBACK 0x00
+#define DFPLAYER_EB          0xEF
+
+/* 제어 명령 (Control Command Values) */
+#define DFPLAYER_CMD_PLAY           0x03
+#define DFPLAYER_CMD_VOLUME         0x06
+#define DFPLAYER_CMD_STOP           0x16
+#define DFPLAYER_CMD_USE_MP3_FOLDER 0x12
+#define DFPLAYER_CMD_INSERT_ADVERT  0x13
+#define DFPLAYER_CMD_STOP_ADVERT    0x15
+
+#define DFPLAYER_STACK_SIZE 10
+
+/** 전송 패킷 (stack). DFPlayerMini_Fast과 동일 레이아웃 */
+typedef struct {
+    uint8_t start_byte;
+    uint8_t version;
+    uint8_t length;
+    uint8_t command_value;
+    uint8_t feedback_value;
+    uint8_t param_msb;
+    uint8_t param_lsb;
+    uint8_t checksum_msb;
+    uint8_t checksum_lsb;
+    uint8_t end_byte;
+} dfplayer_stack_t;
+
+/**
+ * @brief 체크섬 계산 (DFPlayerMini_Fast findChecksum 동일)
+ * checksum = (~(version + length + command + feedback + paramMSB + paramLSB)) + 1
+ */
+static void dfplayer_find_checksum(dfplayer_stack_t *stack)
 {
-    uint16_t sum = 0;
-    for (int i = 1; i < len - 1; i++) {
-        sum += buf[i];
-    }
-    return (uint16_t)(-sum);
+    uint16_t sum = (uint16_t)(stack->version + stack->length + stack->command_value
+                              + stack->feedback_value + stack->param_msb + stack->param_lsb);
+    uint16_t checksum = (uint16_t)((~sum) + 1);
+    stack->checksum_msb = (uint8_t)(checksum >> 8);
+    stack->checksum_lsb = (uint8_t)(checksum & 0xFF);
 }
 
-static esp_err_t dfplayer_send_cmd(uint8_t cmd, uint8_t param_h, uint8_t param_l)
+/** 패킷 전송 */
+static esp_err_t dfplayer_send_stack(const dfplayer_stack_t *stack)
 {
-    uint8_t buf[DFPLAYER_CMD_LEN] = {
-        0x7E, 0xFF, 0x06, cmd, 0x00, param_h, param_l, 0x00, 0x00, 0xEF
+    uint8_t buf[DFPLAYER_STACK_SIZE] = {
+        stack->start_byte,
+        stack->version,
+        stack->length,
+        stack->command_value,
+        stack->feedback_value,
+        stack->param_msb,
+        stack->param_lsb,
+        stack->checksum_msb,
+        stack->checksum_lsb,
+        stack->end_byte,
     };
-    uint16_t cs = dfplayer_checksum(buf, DFPLAYER_CMD_LEN);
-    buf[7] = (uint8_t)(cs >> 8);
-    buf[8] = (uint8_t)(cs & 0xFF);
-    int n = uart_write_bytes(UART_NUM, buf, DFPLAYER_CMD_LEN);
-    if (n != DFPLAYER_CMD_LEN) {
+    int n = uart_write_bytes(UART_NUM, buf, DFPLAYER_STACK_SIZE);
+    if (n != DFPLAYER_STACK_SIZE) {
         ESP_LOGE(TAG, "uart_write_bytes %d", n);
         return ESP_FAIL;
     }
     return ESP_OK;
+}
+
+/** 명령 1회 전송 (공통) */
+static esp_err_t dfplayer_send_cmd(uint8_t cmd, uint8_t param_msb, uint8_t param_lsb)
+{
+    dfplayer_stack_t stack = {
+        .start_byte = DFPLAYER_SB,
+        .version = DFPLAYER_VER,
+        .length = DFPLAYER_LEN,
+        .command_value = cmd,
+        .feedback_value = DFPLAYER_NO_FEEDBACK,
+        .param_msb = param_msb,
+        .param_lsb = param_lsb,
+        .end_byte = DFPLAYER_EB,
+    };
+    dfplayer_find_checksum(&stack);
+    return dfplayer_send_stack(&stack);
 }
 
 esp_err_t rctank_dfplayer_init(void)
@@ -66,17 +125,20 @@ esp_err_t rctank_dfplayer_init(void)
 
 esp_err_t rctank_dfplayer_play(uint8_t track)
 {
-    if (track < 1 || track > 99) return ESP_ERR_INVALID_ARG;
-    return dfplayer_send_cmd(0x0C, 0x00, track);
+    if (track < 1) return ESP_ERR_INVALID_ARG;
+    /* PLAY(0x03): param = track number (MSB, LSB). 0001.mp3 ~ 9999 등 */
+    return dfplayer_send_cmd(DFPLAYER_CMD_PLAY, (uint8_t)((uint16_t)track >> 8), (uint8_t)(track & 0xFF));
 }
 
 esp_err_t rctank_dfplayer_set_volume(uint8_t vol)
 {
     if (vol > 30) vol = 30;
-    return dfplayer_send_cmd(0x06, 0x00, vol);
+    /* VOLUME(0x06): paramLSB = 0~30 */
+    return dfplayer_send_cmd(DFPLAYER_CMD_VOLUME, 0x00, vol);
 }
 
 esp_err_t rctank_dfplayer_stop(void)
 {
-    return dfplayer_send_cmd(0x16, 0x00, 0x00);
+    /* STOP(0x16): param 0, 0 */
+    return dfplayer_send_cmd(DFPLAYER_CMD_STOP, 0x00, 0x00);
 }

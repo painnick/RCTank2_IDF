@@ -204,6 +204,7 @@ static void my_platform_on_device_disconnected(uni_hid_device_t* d)
     rctank_motor_left_track_set(0);
     rctank_motor_right_track_set(0);
     rctank_motor_turret_set(0);
+    rctank_dfplayer_play(RCTANK_DFPLAYER_TRACK_IDLE);
 }
 
 static uni_error_t my_platform_on_device_ready(uni_hid_device_t* d)

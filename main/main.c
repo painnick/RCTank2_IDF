@@ -10,7 +10,6 @@
 #include <hci_dump_embedded_stdout.h>
 #include <uni.h>
 
-
 #include "sdkconfig.h"
 
 // Sanity check

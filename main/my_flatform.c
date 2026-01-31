@@ -23,10 +23,11 @@
 #define AXIS_DEADZONE           60
 #define MOUNT_DEG_STEP          3
 #define DEBOUNCE_MS             100
-#define GUN_FIRE_MS             200
+#define GUN_FIRE_MS             200    /* 포신 LED/서보 유지 시간 */
+#define GUN_DELAY_MS             500    /* 포신: MP3 재생 요청 후 서보/LED/럼블 지연 (DFPlayer 지연 보정) */
 #define MG_FIRE_MS              1000   /* 기관총 발사 시간 (LED 깜빡임) */
 #define MG_LED_BLINK_MS         100    /* 기관총 LED 깜빡임 주기 */
-#define MG_DELAY_MS             500    /* MP3 재생 요청 후 LED/럼블 지연 (DFPlayer 지연 보정) */
+#define MG_DELAY_MS             500    /* 기관총: MP3 재생 요청 후 LED/럼블 지연 (DFPlayer 지연 보정) */
 #define SELECT_START_HOLD_MS    3000
 
 typedef struct my_platform_instance_s {
@@ -44,6 +45,8 @@ static int64_t select_start_pressed_at = 0;
 static uint8_t prev_buttons = 0;
 static uint8_t prev_misc = 0;
 static esp_timer_handle_t gun_timer = NULL;
+static esp_timer_handle_t gun_delayed_start_timer = NULL;
+static uni_hid_device_t* gun_delayed_device = NULL;  /* 500ms 후 럼블용 */
 static esp_timer_handle_t restart_timer = NULL;
 static esp_timer_handle_t mg_blink_timer = NULL;
 static esp_timer_handle_t mg_stop_timer = NULL;
@@ -56,6 +59,20 @@ static void gun_fire_timer_cb(void* arg)
     (void)arg;
     rctank_led_gun_set(0);
     rctank_servo_gun_set_degree(RCTANK_SERVO_GUN_DEG_REST);
+}
+
+/* 포신: MP3 재생 요청 후 500ms 지난 뒤 서보/LED/럼블 시작 (DFPlayer 지연 보정) */
+static void gun_delayed_start_cb(void* arg)
+{
+    (void)arg;
+    uni_hid_device_t* d = gun_delayed_device;
+    gun_delayed_device = NULL;
+    rctank_led_gun_set(1);
+    rctank_servo_gun_set_degree(0);
+    if (d != NULL && d->report_parser.play_dual_rumble != NULL)
+        d->report_parser.play_dual_rumble(d, 0, 400, 150, 255);
+    esp_timer_stop(gun_timer);
+    esp_timer_start_once(gun_timer, GUN_FIRE_MS * 1000);
 }
 
 static void delayed_restart_cb(void* arg)
@@ -113,6 +130,14 @@ static void my_platform_init(int argc, const char** argv)
         .name = "gun_fire",
     };
     esp_timer_create(&gun_timer_args, &gun_timer);
+
+    const esp_timer_create_args_t gun_delayed_start_args = {
+        .callback = &gun_delayed_start_cb,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "gun_delayed",
+    };
+    esp_timer_create(&gun_delayed_start_args, &gun_delayed_start_timer);
 
     const esp_timer_create_args_t restart_timer_args = {
         .callback = &delayed_restart_cb,
@@ -238,16 +263,13 @@ static void my_platform_on_controller_data(uni_hid_device_t* d, uni_controller_t
         rctank_servo_mount_set_degree(mount_angle);
     }
 
-    /* B: 포신 발사 (LED + 효과음 2 + 200ms, 진동 400ms) */
+    /* B: 포신 발사 (MP3 즉시 재생 요청, 500ms 후 서보/LED/럼블) */
     if (gp->buttons & BUTTON_B) {
         if (!(prev_buttons & BUTTON_B)) {
-            rctank_led_gun_set(1);
             rctank_dfplayer_play(RCTANK_DFPLAYER_TRACK_GUN);
-            rctank_servo_gun_set_degree(0);
-            esp_timer_stop(gun_timer);
-            esp_timer_start_once(gun_timer, GUN_FIRE_MS * 1000);
-            if (d->report_parser.play_dual_rumble != NULL)
-                d->report_parser.play_dual_rumble(d, 0, 400, 150, 255);
+            gun_delayed_device = d;
+            esp_timer_stop(gun_delayed_start_timer);
+            esp_timer_start_once(gun_delayed_start_timer, GUN_DELAY_MS * 1000);
         }
     }
 

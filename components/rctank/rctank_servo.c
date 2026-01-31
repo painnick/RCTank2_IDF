@@ -1,0 +1,91 @@
+/**
+ * @file rctank_servo.c
+ * @brief RC Tank LEDC 서보 제어
+ */
+#include "rctank_servo.h"
+#include "rctank_pins.h"
+
+#include "driver/ledc.h"
+#include "esp_log.h"
+
+static const char *TAG = "rctank_servo";
+
+#define LEDC_TIMER              LEDC_TIMER_0
+#define LEDC_MODE               LEDC_LOW_SPEED_MODE
+#define LEDC_DUTY_RES           LEDC_TIMER_10_BIT
+#define LEDC_FREQ_HZ            50
+
+#define SERVO_PULSE_MIN_US      500
+#define SERVO_PULSE_MAX_US      2500
+#define SERVO_DEGREE_RANGE      180
+
+static uint32_t degree_to_duty(int degree)
+{
+    if (degree < 0) degree = 0;
+    if (degree > SERVO_DEGREE_RANGE) degree = SERVO_DEGREE_RANGE;
+    uint32_t us = SERVO_PULSE_MIN_US + (SERVO_PULSE_MAX_US - SERVO_PULSE_MIN_US) * (uint32_t)degree / SERVO_DEGREE_RANGE;
+    uint32_t max_duty = (1 << LEDC_DUTY_RES) - 1;
+    return (us * LEDC_FREQ_HZ * max_duty) / 1000000;
+}
+
+esp_err_t rctank_servo_init(void)
+{
+    ledc_timer_config_t timer_config = {
+        .speed_mode = LEDC_MODE,
+        .duty_resolution = LEDC_DUTY_RES,
+        .timer_num = LEDC_TIMER,
+        .freq_hz = LEDC_FREQ_HZ,
+        .clk_cfg = LEDC_AUTO_CLK,
+    };
+    esp_err_t ret = ledc_timer_config(&timer_config);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "ledc_timer_config %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ledc_channel_config_t ch_config = {
+        .gpio_num = RCTANK_PIN_SERVO_MOUNT,
+        .speed_mode = LEDC_MODE,
+        .channel = LEDC_CHANNEL_0,
+        .timer_sel = LEDC_TIMER,
+        .duty = degree_to_duty(RCTANK_SERVO_MOUNT_DEG_DEF),
+        .hpoint = 0,
+    };
+    ret = ledc_channel_config(&ch_config);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "ledc_channel_config mount %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ch_config.gpio_num = RCTANK_PIN_SERVO_GUN;
+    ch_config.channel = LEDC_CHANNEL_1;
+    ch_config.duty = degree_to_duty(RCTANK_SERVO_GUN_DEG_REST);
+    ret = ledc_channel_config(&ch_config);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "ledc_channel_config gun %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    rctank_servo_mount_set_degree(RCTANK_SERVO_MOUNT_DEG_DEF);
+    rctank_servo_gun_set_degree(RCTANK_SERVO_GUN_DEG_REST);
+    ESP_LOGI(TAG, "servo init ok (mount %d, gun %d)", RCTANK_SERVO_MOUNT_DEG_DEF, RCTANK_SERVO_GUN_DEG_REST);
+    return ESP_OK;
+}
+
+void rctank_servo_mount_set_degree(int degree)
+{
+    if (degree < RCTANK_SERVO_MOUNT_DEG_MIN) degree = RCTANK_SERVO_MOUNT_DEG_MIN;
+    if (degree > RCTANK_SERVO_MOUNT_DEG_MAX) degree = RCTANK_SERVO_MOUNT_DEG_MAX;
+    uint32_t duty = degree_to_duty(degree);
+    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, duty);
+    ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
+}
+
+void rctank_servo_gun_set_degree(int degree)
+{
+    if (degree < 0) degree = 0;
+    if (degree > SERVO_DEGREE_RANGE) degree = SERVO_DEGREE_RANGE;
+    uint32_t duty = degree_to_duty(degree);
+    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, duty);
+    ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
+}

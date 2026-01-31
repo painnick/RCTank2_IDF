@@ -1,175 +1,305 @@
-// Example file - Public Domain
-// Need help? https://tinyurl.com/bluepad32-help
+// RC Tank platform - Bluepad32 + rctank (README.md 기능)
+// C 함수 형태 구현 (Agent.md 코딩 규칙)
 
 #include <string.h>
 
 #include <uni.h>
+#include <platform/uni_platform.h>
+#include "controller/uni_controller.h"
+#include "controller/uni_gamepad.h"
+
 #include "driver/gpio.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-// Custom "instance"
+#include "rctank.h"
+#include "rctank_led.h"
+#include "rctank_motor.h"
+#include "rctank_servo.h"
+#include "rctank_dfplayer.h"
+#include "rctank_storage.h"
+
+#define AXIS_DEADZONE           60
+#define MOUNT_DEG_STEP          3
+#define DEBOUNCE_MS             100
+#define GUN_FIRE_MS             200
+#define SELECT_START_HOLD_MS    3000
+
 typedef struct my_platform_instance_s {
-    uni_gamepad_seat_t gamepad_seat;  // which "seat" is being used
+    uni_gamepad_seat_t gamepad_seat;
 } my_platform_instance_t;
 
-// Declarations
 static void trigger_event_on_gamepad(uni_hid_device_t* d);
 static my_platform_instance_t* get_my_platform_instance(uni_hid_device_t* d);
 
-//
-// Platform Overrides
-//
-static void my_platform_init(int argc, const char** argv) {
-    ARG_UNUSED(argc);
-    ARG_UNUSED(argv);
+static int mount_angle = RCTANK_SERVO_MOUNT_DEG_DEF;
+static int64_t last_y_ms = 0;
+static int64_t last_l1_ms = 0;
+static int64_t last_r1_ms = 0;
+static int64_t select_start_pressed_at = 0;
+static uint8_t prev_buttons = 0;
+static uint8_t prev_misc = 0;
+static esp_timer_handle_t gun_timer = NULL;
+static esp_timer_handle_t restart_timer = NULL;
 
-    logi("custom: init()\n");
-
-#if 0
-    uni_gamepad_mappings_t mappings = GAMEPAD_DEFAULT_MAPPINGS;
-
-    // Inverted axis with inverted Y in RY.
-    mappings.axis_x = UNI_GAMEPAD_MAPPINGS_AXIS_RX;
-    mappings.axis_y = UNI_GAMEPAD_MAPPINGS_AXIS_RY;
-    mappings.axis_ry_inverted = true;
-    mappings.axis_rx = UNI_GAMEPAD_MAPPINGS_AXIS_X;
-    mappings.axis_ry = UNI_GAMEPAD_MAPPINGS_AXIS_Y;
-
-    // Invert A & B
-    mappings.button_a = UNI_GAMEPAD_MAPPINGS_BUTTON_B;
-    mappings.button_b = UNI_GAMEPAD_MAPPINGS_BUTTON_A;
-
-    uni_gamepad_set_mappings(&mappings);
-#endif
-    // uni_bt_service_set_enabled(true);
+static void gun_fire_timer_cb(void* arg)
+{
+    (void)arg;
+    rctank_led_gun_set(0);
+    rctank_servo_gun_set_degree(RCTANK_SERVO_GUN_DEG_REST);
 }
 
-static void my_platform_on_init_complete(void) {
+static void delayed_restart_cb(void* arg)
+{
+    (void)arg;
+    rctank_storage_erase_and_restart();
+}
+
+static void my_platform_init(int argc, const char** argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+    logi("custom: init()\n");
+
+    esp_err_t err = rctank_init();
+    if (err != ESP_OK) {
+        loge("rctank_init failed: %s\n", esp_err_to_name(err));
+        return;
+    }
+
+    const esp_timer_create_args_t gun_timer_args = {
+        .callback = &gun_fire_timer_cb,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "gun_fire",
+    };
+    esp_timer_create(&gun_timer_args, &gun_timer);
+
+    const esp_timer_create_args_t restart_timer_args = {
+        .callback = &delayed_restart_cb,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "restart",
+    };
+    esp_timer_create(&restart_timer_args, &restart_timer);
+}
+
+static void my_platform_on_init_complete(void)
+{
     logi("custom: on_init_complete()\n");
-
-    // Safe to call "unsafe" functions since they are called from BT thread
-
-    // Start scanning
     uni_bt_start_scanning_and_autoconnect_unsafe();
     uni_bt_allow_incoming_connections(true);
-
-    // Based on runtime condition, you can delete or list the stored BT keys.
     if (1)
         uni_bt_del_keys_unsafe();
     else
         uni_bt_list_keys_unsafe();
 }
 
-static uni_error_t my_platform_on_device_discovered(bd_addr_t addr, const char* name, uint16_t cod, uint8_t rssi) {
-    // You can filter discovered devices here.
-    // Just return any value different from UNI_ERROR_SUCCESS;
-    // @param addr: the Bluetooth address
-    // @param name: could be NULL, could be zero-length, or might contain the name.
-    // @param cod: Class of Device. See "uni_bt_defines.h" for possible values.
-    // @param rssi: Received Signal Strength Indicator (RSSI) measured in dBms. The higher (255) the better.
-
-    // As an example, if you want to filter out keyboards, do:
+static uni_error_t my_platform_on_device_discovered(bd_addr_t addr, const char* name, uint16_t cod, uint8_t rssi)
+{
+    (void)addr;
+    (void)name;
+    (void)rssi;
     if (((cod & UNI_BT_COD_MINOR_MASK) & UNI_BT_COD_MINOR_KEYBOARD) == UNI_BT_COD_MINOR_KEYBOARD) {
         logi("Ignoring keyboard\n");
         return UNI_ERROR_IGNORE_DEVICE;
     }
-
     return UNI_ERROR_SUCCESS;
 }
 
-static void my_platform_on_device_connected(uni_hid_device_t* d) {
+static void my_platform_on_device_connected(uni_hid_device_t* d)
+{
     logi("custom: device connected: %p\n", d);
 }
 
-static void my_platform_on_device_disconnected(uni_hid_device_t* d) {
+static void my_platform_on_device_disconnected(uni_hid_device_t* d)
+{
     logi("custom: device disconnected: %p\n", d);
+    rctank_motor_left_track_set(0);
+    rctank_motor_right_track_set(0);
+    rctank_motor_turret_set(0);
 }
 
-static uni_error_t my_platform_on_device_ready(uni_hid_device_t* d) {
+static uni_error_t my_platform_on_device_ready(uni_hid_device_t* d)
+{
     logi("custom: device ready: %p\n", d);
     my_platform_instance_t* ins = get_my_platform_instance(d);
     ins->gamepad_seat = GAMEPAD_SEAT_A;
 
+    rctank_dfplayer_stop();
+    rctank_dfplayer_play(RCTANK_DFPLAYER_TRACK_CONNECT);
     trigger_event_on_gamepad(d);
+    if (d->report_parser.play_dual_rumble != NULL)
+        d->report_parser.play_dual_rumble(d, 0, 400, 128, 200);
     return UNI_ERROR_SUCCESS;
 }
 
-static void my_platform_on_controller_data(uni_hid_device_t* d, uni_controller_t* ctl) {
-    static uint8_t leds = 0;
-    static uint8_t enabled = true;
-    static uni_controller_t prev = {0};
-    uni_gamepad_t* gp;
-
-    // Optimization to avoid processing the previous data so that the console
-    // does not get spammed with a lot of logs, but remove it from your project.
-    if (memcmp(&prev, ctl, sizeof(*ctl)) == 0) {
-        return;
-    }
-    prev = *ctl;
-
-    switch (ctl->klass) {
-        case UNI_CONTROLLER_CLASS_GAMEPAD:
-            gp = &ctl->gamepad;
-            break;
-        default:
-            break;
-    }
+static int32_t clamp_axis(int32_t v)
+{
+    if (v > 511) return 511;
+    if (v < -512) return -512;
+    return v;
 }
 
-static const uni_property_t* my_platform_get_property(uni_property_idx_t idx) {
+static void my_platform_on_controller_data(uni_hid_device_t* d, uni_controller_t* ctl)
+{
+    if (ctl->klass != UNI_CONTROLLER_CLASS_GAMEPAD)
+        return;
+
+    uni_gamepad_t* gp = &ctl->gamepad;
+    int64_t now_ms = esp_timer_get_time() / 1000;
+
+    /* 트랙: 좌측 스틱 Y = 좌측 트랙, 우측 스틱 Y = 우측 트랙 (위로 = 전진) */
+    int32_t ly = clamp_axis(gp->axis_y);
+    int32_t ry = clamp_axis(gp->axis_ry);
+    if (ly > -AXIS_DEADZONE && ly < AXIS_DEADZONE) ly = 0;
+    if (ry > -AXIS_DEADZONE && ry < AXIS_DEADZONE) ry = 0;
+    rctank_motor_left_track_set(-ly);
+    rctank_motor_right_track_set(-ry);
+
+    /* 터렛: D-PAD 좌우 */
+    int32_t turret = 0;
+    if (gp->dpad & DPAD_LEFT)  turret = -400;
+    if (gp->dpad & DPAD_RIGHT) turret = 400;
+    rctank_motor_turret_set(turret);
+
+    /* 포 마운트: D-PAD 상하 75~135도 */
+    if (gp->dpad & DPAD_UP) {
+        mount_angle += MOUNT_DEG_STEP;
+        if (mount_angle > RCTANK_SERVO_MOUNT_DEG_MAX) mount_angle = RCTANK_SERVO_MOUNT_DEG_MAX;
+        rctank_servo_mount_set_degree(mount_angle);
+    }
+    if (gp->dpad & DPAD_DOWN) {
+        mount_angle -= MOUNT_DEG_STEP;
+        if (mount_angle < RCTANK_SERVO_MOUNT_DEG_MIN) mount_angle = RCTANK_SERVO_MOUNT_DEG_MIN;
+        rctank_servo_mount_set_degree(mount_angle);
+    }
+
+    /* B: 포신 발사 (LED + 효과음 2 + 200ms, 진동 400ms) */
+    if (gp->buttons & BUTTON_B) {
+        if (!(prev_buttons & BUTTON_B)) {
+            rctank_led_gun_set(1);
+            rctank_dfplayer_play(RCTANK_DFPLAYER_TRACK_GUN);
+            rctank_servo_gun_set_degree(0);
+            esp_timer_stop(gun_timer);
+            esp_timer_start_once(gun_timer, GUN_FIRE_MS * 1000);
+            if (d->report_parser.play_dual_rumble != NULL)
+                d->report_parser.play_dual_rumble(d, 0, 400, 150, 255);
+        }
+    }
+
+    /* A: 기관총 (LED 없음 + 효과음 3, 진동 300ms) */
+    if (gp->buttons & BUTTON_A) {
+        if (!(prev_buttons & BUTTON_A)) {
+            rctank_dfplayer_play(RCTANK_DFPLAYER_TRACK_MG);
+            if (d->report_parser.play_dual_rumble != NULL)
+                d->report_parser.play_dual_rumble(d, 0, 300, 150, 200);
+        }
+    }
+
+    /* Y: 헤드라이트 토글 (100ms 간격) */
+    if (gp->buttons & BUTTON_Y) {
+        if (now_ms - last_y_ms >= DEBOUNCE_MS) {
+            last_y_ms = now_ms;
+            int on = !rctank_led_headlight_get();
+            rctank_led_headlight_set(on);
+        }
+    }
+
+    /* L1: 볼륨 감소 (100ms 간격), 뗐을 때 NVS 저장 */
+    if (gp->buttons & BUTTON_SHOULDER_L) {
+        if (now_ms - last_l1_ms >= DEBOUNCE_MS) {
+            last_l1_ms = now_ms;
+            uint8_t v = rctank_storage_volume_get();
+            if (v > RCTANK_VOLUME_MIN) {
+                v--;
+                rctank_storage_volume_set(v);
+                rctank_dfplayer_set_volume(v);
+            }
+        }
+    } else {
+        if (prev_buttons & BUTTON_SHOULDER_L)
+            rctank_storage_volume_set(rctank_storage_volume_get());
+    }
+
+    /* R1: 볼륨 증가 (100ms 간격), 뗐을 때 NVS 저장 */
+    if (gp->buttons & BUTTON_SHOULDER_R) {
+        if (now_ms - last_r1_ms >= DEBOUNCE_MS) {
+            last_r1_ms = now_ms;
+            uint8_t v = rctank_storage_volume_get();
+            if (v < RCTANK_VOLUME_MAX) {
+                v++;
+                rctank_storage_volume_set(v);
+                rctank_dfplayer_set_volume(v);
+            }
+        }
+    } else {
+        if (prev_buttons & BUTTON_SHOULDER_R)
+            rctank_storage_volume_set(rctank_storage_volume_get());
+    }
+
+    /* Select + Start 3초: EEPROM 초기화 및 재시작, 진동 800ms 후 재시작 */
+    uint8_t sel = (gp->misc_buttons & MISC_BUTTON_SELECT) ? 1 : 0;
+    uint8_t sta = (gp->misc_buttons & MISC_BUTTON_START) ? 1 : 0;
+    if (sel && sta) {
+        if (select_start_pressed_at == 0)
+            select_start_pressed_at = now_ms;
+        if (now_ms - select_start_pressed_at >= SELECT_START_HOLD_MS) {
+            if (d->report_parser.play_dual_rumble != NULL)
+                d->report_parser.play_dual_rumble(d, 0, 800, 255, 255);
+            esp_timer_stop(restart_timer);
+            esp_timer_start_once(restart_timer, 800 * 1000);
+        }
+    } else {
+        select_start_pressed_at = 0;
+    }
+
+    prev_buttons = gp->buttons;
+    prev_misc = gp->misc_buttons;
+}
+
+static const uni_property_t* my_platform_get_property(uni_property_idx_t idx)
+{
     ARG_UNUSED(idx);
     return NULL;
 }
 
-static void my_platform_on_oob_event(uni_platform_oob_event_t event, void* data) {
+static void my_platform_on_oob_event(uni_platform_oob_event_t event, void* data)
+{
     switch (event) {
         case UNI_PLATFORM_OOB_GAMEPAD_SYSTEM_BUTTON: {
             uni_hid_device_t* d = data;
-
             if (d == NULL) {
                 loge("ERROR: my_platform_on_oob_event: Invalid NULL device\n");
                 return;
             }
-            logi("custom: on_device_oob_event(): %d\n", event);
-
             my_platform_instance_t* ins = get_my_platform_instance(d);
             ins->gamepad_seat = ins->gamepad_seat == GAMEPAD_SEAT_A ? GAMEPAD_SEAT_B : GAMEPAD_SEAT_A;
-
             trigger_event_on_gamepad(d);
             break;
         }
-
         case UNI_PLATFORM_OOB_BLUETOOTH_ENABLED:
             logi("custom: Bluetooth enabled: %d\n", (bool)(data));
             break;
-
         default:
             logi("my_platform_on_oob_event: unsupported event: 0x%04x\n", event);
             break;
     }
 }
 
-//
-// Helpers
-//
-static my_platform_instance_t* get_my_platform_instance(uni_hid_device_t* d) {
+static my_platform_instance_t* get_my_platform_instance(uni_hid_device_t* d)
+{
     return (my_platform_instance_t*)&d->platform_data[0];
 }
 
-static void trigger_event_on_gamepad(uni_hid_device_t* d) {
+static void trigger_event_on_gamepad(uni_hid_device_t* d)
+{
     my_platform_instance_t* ins = get_my_platform_instance(d);
-
-    if (d->report_parser.play_dual_rumble != NULL) {
-        d->report_parser.play_dual_rumble(d, 0 /* delayed start ms */, 150 /* duration ms */, 128 /* weak magnitude */,
-                                          40 /* strong magnitude */);
-    }
-
-    if (d->report_parser.set_player_leds != NULL) {
+    if (d->report_parser.play_dual_rumble != NULL)
+        d->report_parser.play_dual_rumble(d, 0, 150, 128, 40);
+    if (d->report_parser.set_player_leds != NULL)
         d->report_parser.set_player_leds(d, ins->gamepad_seat);
-    }
-
     if (d->report_parser.set_lightbar_color != NULL) {
         uint8_t red = (ins->gamepad_seat & 0x01) ? 0xff : 0;
         uint8_t green = (ins->gamepad_seat & 0x02) ? 0xff : 0;
@@ -178,10 +308,8 @@ static void trigger_event_on_gamepad(uni_hid_device_t* d) {
     }
 }
 
-//
-// Entry Point
-//
-struct uni_platform* get_my_platform(void) {
+struct uni_platform* get_my_platform(void)
+{
     static struct uni_platform plat = {
         .name = "custom",
         .init = my_platform_init,
@@ -194,6 +322,5 @@ struct uni_platform* get_my_platform(void) {
         .on_controller_data = my_platform_on_controller_data,
         .get_property = my_platform_get_property,
     };
-
     return &plat;
 }

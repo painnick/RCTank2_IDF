@@ -26,8 +26,8 @@
 #define HEADLIGHT_DEBOUNCE_MS   400    /* 헤드라이트 토글 최소 간격 (둔감) */
 #define GUN_FIRE_MS             200    /* 포신 LED/서보 유지 시간 */
 #define GUN_DELAY_MS             500    /* 포신: MP3 재생 요청 후 서보/LED/럼블 지연 (DFPlayer 지연 보정) */
-#define MG_FIRE_MS              1000   /* 기관총 발사 시간 (LED 깜빡임) */
-#define MG_LED_BLINK_MS         100    /* 기관총 LED 깜빡임 주기 */
+#define MG_FIRE_MS              700   /* 기관총 발사 시간 (LED 깜빡임) */
+#define MG_LED_BLINK_MS         75    /* 기관총 LED 깜빡임 주기 */
 #define MG_DELAY_MS             500    /* 기관총: MP3 재생 요청 후 LED/럼블 지연 (DFPlayer 지연 보정) */
 #define SELECT_START_HOLD_MS    3000
 

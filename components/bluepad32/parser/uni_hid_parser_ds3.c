@@ -331,7 +331,7 @@ bool uni_hid_parser_ds3_does_name_match(struct uni_hid_device_s* d, const char* 
     if (strcmp("Navigation Controller", name) == 0) {
         // Should report this product id but need to update uni_hid_device_vendors.h
         // product_id = PS3NAV_PID;
-    } else if (strncmp("PLAYSTATION(R)3", name, 15) >= 0) {
+    } else if (strstr(name, "PLAYSTATION(R)3") != NULL) {
         if (strcmp("PLAYSTATION(R)3 Controller", name) != 0) {
             ds3_instance_t* ins = get_ds3_instance(d);
             ins->clone_controller = true;

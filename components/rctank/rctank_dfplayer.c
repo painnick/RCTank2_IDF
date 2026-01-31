@@ -12,6 +12,8 @@
 #include "freertos/task.h"
 
 static const char *TAG = "rctank_dfplayer";
+static TaskHandle_t s_rx_task = NULL;
+
 
 #define UART_NUM            UART_NUM_1
 #define UART_BAUD           9600
@@ -87,6 +89,7 @@ static esp_err_t dfplayer_send_stack(const dfplayer_stack_t *stack)
 }
 
 /** 명령 1회 전송 (공통) */
+/** 명령 1회 전송 (공통) */
 static esp_err_t dfplayer_send_cmd(uint8_t cmd, uint8_t param_msb, uint8_t param_lsb)
 {
     dfplayer_stack_t stack = {
@@ -101,6 +104,64 @@ static esp_err_t dfplayer_send_cmd(uint8_t cmd, uint8_t param_msb, uint8_t param
     };
     dfplayer_find_checksum(&stack);
     return dfplayer_send_stack(&stack);
+}
+
+/** Check if calculated checksum matches received one */
+static bool dfplayer_verify_checksum(const dfplayer_stack_t *stack)
+{
+    uint16_t sum = (uint16_t)(stack->version + stack->length + stack->command_value
+                              + stack->feedback_value + stack->param_msb + stack->param_lsb);
+    uint16_t checksum = (uint16_t)((~sum) + 1);
+    return (stack->checksum_msb == (uint8_t)(checksum >> 8)) &&
+           (stack->checksum_lsb == (uint8_t)(checksum & 0xFF));
+}
+
+static void dfplayer_task(void *arg)
+{
+    uint8_t data[128];
+    int idx = 0; 
+    uint8_t pkt_buf[DFPLAYER_STACK_SIZE]; 
+    int pkt_idx = 0;
+
+    /* Simple state machine vars */
+    while (1) {
+        int len = uart_read_bytes(UART_NUM, data, sizeof(data), pdMS_TO_TICKS(50));
+        if (len > 0) {
+           for (int i = 0; i < len; i++) {
+               uint8_t b = data[i];
+               /* 찾는 중: 헤더(0x7E) */
+               if (pkt_idx == 0) {
+                   if (b == DFPLAYER_SB) {
+                       pkt_buf[pkt_idx++] = b;
+                   }
+               } else {
+                   pkt_buf[pkt_idx++] = b;
+                   if (pkt_idx >= DFPLAYER_STACK_SIZE) {
+                       /* 패킷 완성 확인 (EndByte = 0xEF) */
+                       if (pkt_buf[9] == DFPLAYER_EB) {
+                           dfplayer_stack_t *s = (dfplayer_stack_t *)pkt_buf;
+                           /* 체크섬 검증 */
+                           if (dfplayer_verify_checksum(s)) {
+                               // ESP_LOGI(TAG, "RX Cmd: 0x%02X P1:0x%02X P2:0x%02X", s->command_value, s->param_msb, s->param_lsb);
+                               /* 0x3D = Track Finished (3.2.1.1 Playback finished "3D 00 00 01 xx xx EF") */
+                               if (s->command_value == 0x3D) {
+                                   uint16_t track = ((uint16_t)s->param_msb << 8) | s->param_lsb;
+                                   // ESP_LOGI(TAG, "Track %d Finished", track);
+                                   if (track == RCTANK_DFPLAYER_TRACK_IDLE) {
+                                       /* 1번 트랙(IDLE) 종료 시 다시 재생 */
+                                       rctank_dfplayer_play(RCTANK_DFPLAYER_TRACK_IDLE);
+                                   }
+                               }
+                           } else {
+                               ESP_LOGW(TAG, "Checksum fail");
+                           }
+                       }
+                       pkt_idx = 0; /* Reset */
+                   }
+               }
+           }
+        }
+    }
 }
 
 esp_err_t rctank_dfplayer_init(void)
@@ -121,6 +182,9 @@ esp_err_t rctank_dfplayer_init(void)
     if (ret != ESP_OK) return ret;
 
     vTaskDelay(pdMS_TO_TICKS(200));
+
+    xTaskCreate(dfplayer_task, "dfplayer_task", 2048, NULL, 5, &s_rx_task);
+
     ESP_LOGI(TAG, "dfplayer init ok");
     return ESP_OK;
 }
@@ -130,13 +194,6 @@ esp_err_t rctank_dfplayer_play(uint8_t track)
     if (track < 1) return ESP_ERR_INVALID_ARG;
     /* PLAY(0x03): param = track number (MSB, LSB). 0001.mp3 ~ 9999 등 */
     return dfplayer_send_cmd(DFPLAYER_CMD_PLAY, (uint8_t)((uint16_t)track >> 8), (uint8_t)(track & 0xFF));
-}
-
-esp_err_t rctank_dfplayer_play_loop(uint8_t track)
-{
-    if (track < 1) return ESP_ERR_INVALID_ARG;
-    /* PLAYBACK_MODE(0x08): param = 트랙 번호 → 해당 트랙 반복 재생 (DFPlayerMini_Fast loop) */
-    return dfplayer_send_cmd(DFPLAYER_CMD_PLAYBACK_MODE, (uint8_t)((uint16_t)track >> 8), (uint8_t)(track & 0xFF));
 }
 
 esp_err_t rctank_dfplayer_set_volume(uint8_t vol)
@@ -150,16 +207,4 @@ esp_err_t rctank_dfplayer_stop(void)
 {
     /* STOP(0x16): param 0, 0 */
     return dfplayer_send_cmd(DFPLAYER_CMD_STOP, 0x00, 0x00);
-}
-
-esp_err_t rctank_dfplayer_stop_repeat(void)
-{
-    /* REPEAT_PLAY(0x11) STOP_REPEAT(0x00): 루프 해제 → 다음 play()는 1회만 재생 */
-    uint8_t buf[DFPLAYER_STACK_SIZE] = {0x7E, 0xFF, 0x06, 0x11, 0x00, 0x00, 0x00, 0xFE, 0xE9, 0xEF};
-    int n = uart_write_bytes(UART_NUM, buf, DFPLAYER_STACK_SIZE);
-    if (n != DFPLAYER_STACK_SIZE) {
-        ESP_LOGE(TAG, "uart_write_bytes %d", n);
-        return ESP_FAIL;
-    }
-    return ESP_OK;
 }

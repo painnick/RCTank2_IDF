@@ -3,10 +3,11 @@
 
 #include <string.h>
 
-#include <uni.h>
 #include <platform/uni_platform.h>
+#include <uni.h>
 #include "controller/uni_controller.h"
 #include "controller/uni_gamepad.h"
+
 
 #include "driver/gpio.h"
 #include "esp_timer.h"
@@ -14,22 +15,23 @@
 #include "freertos/task.h"
 
 #include "rctank.h"
+#include "rctank_dfplayer.h"
 #include "rctank_led.h"
 #include "rctank_motor.h"
 #include "rctank_servo.h"
-#include "rctank_dfplayer.h"
 #include "rctank_storage.h"
 
-#define AXIS_DEADZONE           60
-#define MOUNT_DEG_STEP          3
-#define DEBOUNCE_MS             100
-#define HEADLIGHT_DEBOUNCE_MS   400    /* 헤드라이트 토글 최소 간격 (둔감) */
-#define GUN_FIRE_MS             300    /* 포신 LED/서보 유지 시간 */
-#define GUN_DELAY_MS             500    /* 포신: MP3 재생 요청 후 서보/LED/럼블 지연 (DFPlayer 지연 보정) */
-#define MG_FIRE_MS              700   /* 기관총 발사 시간 (LED 깜빡임) */
-#define MG_LED_BLINK_MS         75    /* 기관총 LED 깜빡임 주기 */
-#define MG_DELAY_MS             500    /* 기관총: MP3 재생 요청 후 LED/럼블 지연 (DFPlayer 지연 보정) */
-#define SELECT_START_HOLD_MS    3000
+
+#define AXIS_DEADZONE 60
+#define MOUNT_DEG_STEP 3
+#define DEBOUNCE_MS 100
+#define HEADLIGHT_DEBOUNCE_MS 400 /* 헤드라이트 토글 최소 간격 (둔감) */
+#define GUN_FIRE_MS 300           /* 포신 LED/서보 유지 시간 */
+#define GUN_DELAY_MS 500          /* 포신: MP3 재생 요청 후 서보/LED/럼블 지연 (DFPlayer 지연 보정) */
+#define MG_FIRE_MS 700            /* 기관총 발사 시간 (LED 깜빡임) */
+#define MG_LED_BLINK_MS 75        /* 기관총 LED 깜빡임 주기 */
+#define MG_DELAY_MS 500           /* 기관총: MP3 재생 요청 후 LED/럼블 지연 (DFPlayer 지연 보정) */
+#define SELECT_START_HOLD_MS 3000
 
 typedef struct my_platform_instance_s {
     uni_gamepad_seat_t gamepad_seat;
@@ -47,24 +49,22 @@ static uint8_t prev_buttons = 0;
 static uint8_t prev_misc = 0;
 static esp_timer_handle_t gun_timer = NULL;
 static esp_timer_handle_t gun_delayed_start_timer = NULL;
-static uni_hid_device_t* gun_delayed_device = NULL;  /* 500ms 후 럼블용 */
+static uni_hid_device_t* gun_delayed_device = NULL; /* 500ms 후 럼블용 */
 static esp_timer_handle_t restart_timer = NULL;
 static esp_timer_handle_t mg_blink_timer = NULL;
 static esp_timer_handle_t mg_stop_timer = NULL;
 static esp_timer_handle_t mg_delayed_start_timer = NULL;
-static uni_hid_device_t* mg_delayed_device = NULL;  /* 500ms 후 럼블용 */
+static uni_hid_device_t* mg_delayed_device = NULL; /* 500ms 후 럼블용 */
 static int mg_led_toggle = 0;
 
-static void gun_fire_timer_cb(void* arg)
-{
+static void gun_fire_timer_cb(void* arg) {
     (void)arg;
     rctank_led_gun_set(0);
     rctank_servo_gun_set_degree(RCTANK_SERVO_GUN_DEG_REST);
 }
 
 /* 포신: MP3 재생 요청 후 500ms 지난 뒤 서보/LED/럼블 시작 (DFPlayer 지연 보정) */
-static void gun_delayed_start_cb(void* arg)
-{
+static void gun_delayed_start_cb(void* arg) {
     (void)arg;
     uni_hid_device_t* d = gun_delayed_device;
     gun_delayed_device = NULL;
@@ -76,29 +76,25 @@ static void gun_delayed_start_cb(void* arg)
     esp_timer_start_once(gun_timer, GUN_FIRE_MS * 1000);
 }
 
-static void delayed_restart_cb(void* arg)
-{
+static void delayed_restart_cb(void* arg) {
     (void)arg;
     rctank_storage_erase_and_restart();
 }
 
-static void mg_blink_timer_cb(void* arg)
-{
+static void mg_blink_timer_cb(void* arg) {
     (void)arg;
     mg_led_toggle = !mg_led_toggle;
     rctank_led_mg_set(mg_led_toggle);
 }
 
-static void mg_stop_timer_cb(void* arg)
-{
+static void mg_stop_timer_cb(void* arg) {
     (void)arg;
     esp_timer_stop(mg_blink_timer);
     rctank_led_mg_set(0);
 }
 
 /* MP3 재생 요청 후 500ms 지난 뒤 LED 깜빡임 + 럼블 시작 (DFPlayer 지연 보정) */
-static void mg_delayed_start_cb(void* arg)
-{
+static void mg_delayed_start_cb(void* arg) {
     (void)arg;
     uni_hid_device_t* d = mg_delayed_device;
     mg_delayed_device = NULL;
@@ -112,8 +108,7 @@ static void mg_delayed_start_cb(void* arg)
     esp_timer_start_once(mg_stop_timer, MG_FIRE_MS * 1000);
 }
 
-static void my_platform_init(int argc, const char** argv)
-{
+static void my_platform_init(int argc, const char** argv) {
     ARG_UNUSED(argc);
     ARG_UNUSED(argv);
     logi("custom: init()\n");
@@ -173,16 +168,15 @@ static void my_platform_init(int argc, const char** argv)
     esp_timer_create(&mg_delayed_start_args, &mg_delayed_start_timer);
 }
 
-static void my_platform_on_init_complete(void)
-{
+static void my_platform_on_init_complete(void) {
     logi("custom: on_init_complete()\n");
     uni_bt_start_scanning_and_autoconnect_unsafe();
     uni_bt_allow_incoming_connections(true);
     /* 저장된 페어링 정보 유지 → 다음 연결 시 빠른 자동 재연결 (uni_bt_del_keys_unsafe 호출 안 함) */
 
-
     esp_err_t ret = rctank_dfplayer_init();
-    if (ret != ESP_OK) return;
+    if (ret != ESP_OK)
+        return;
 
     uint8_t vol = rctank_storage_volume_get();
     rctank_dfplayer_set_volume(vol);
@@ -191,8 +185,7 @@ static void my_platform_on_init_complete(void)
     rctank_dfplayer_play(RCTANK_DFPLAYER_TRACK_IDLE);
 }
 
-static uni_error_t my_platform_on_device_discovered(bd_addr_t addr, const char* name, uint16_t cod, uint8_t rssi)
-{
+static uni_error_t my_platform_on_device_discovered(bd_addr_t addr, const char* name, uint16_t cod, uint8_t rssi) {
     (void)addr;
     (void)name;
     (void)rssi;
@@ -203,13 +196,11 @@ static uni_error_t my_platform_on_device_discovered(bd_addr_t addr, const char* 
     return UNI_ERROR_SUCCESS;
 }
 
-static void my_platform_on_device_connected(uni_hid_device_t* d)
-{
+static void my_platform_on_device_connected(uni_hid_device_t* d) {
     logi("custom: device connected: %p\n", d);
 }
 
-static void my_platform_on_device_disconnected(uni_hid_device_t* d)
-{
+static void my_platform_on_device_disconnected(uni_hid_device_t* d) {
     logi("custom: device disconnected: %p\n", d);
     rctank_motor_left_track_set(0);
     rctank_motor_right_track_set(0);
@@ -217,17 +208,13 @@ static void my_platform_on_device_disconnected(uni_hid_device_t* d)
     rctank_dfplayer_play(RCTANK_DFPLAYER_TRACK_IDLE);
 }
 
-static uni_error_t my_platform_on_device_ready(uni_hid_device_t* d)
-{
+static uni_error_t my_platform_on_device_ready(uni_hid_device_t* d) {
     logi("custom: device ready: %p\n", d);
     my_platform_instance_t* ins = get_my_platform_instance(d);
     ins->gamepad_seat = GAMEPAD_SEAT_A;
 
     // rctank_dfplayer_stop();
     // vTaskDelay(pdMS_TO_TICKS(100));
-
-    // rctank_dfplayer_stop_repeat();
-    // vTaskDelay(pdMS_TO_TICKS(200));
 
     rctank_dfplayer_play(RCTANK_DFPLAYER_TRACK_CONNECT);
     trigger_event_on_gamepad(d);
@@ -236,15 +223,15 @@ static uni_error_t my_platform_on_device_ready(uni_hid_device_t* d)
     return UNI_ERROR_SUCCESS;
 }
 
-static int32_t clamp_axis(int32_t v)
-{
-    if (v > 511) return 511;
-    if (v < -512) return -512;
+static int32_t clamp_axis(int32_t v) {
+    if (v > 511)
+        return 511;
+    if (v < -512)
+        return -512;
     return v;
 }
 
-static void my_platform_on_controller_data(uni_hid_device_t* d, uni_controller_t* ctl)
-{
+static void my_platform_on_controller_data(uni_hid_device_t* d, uni_controller_t* ctl) {
     if (ctl->klass != UNI_CONTROLLER_CLASS_GAMEPAD)
         return;
 
@@ -254,26 +241,32 @@ static void my_platform_on_controller_data(uni_hid_device_t* d, uni_controller_t
     /* 트랙: 좌측 스틱 Y = 좌측 트랙, 우측 스틱 Y = 우측 트랙 (위로 = 전진) */
     int32_t ly = clamp_axis(gp->axis_y);
     int32_t ry = clamp_axis(gp->axis_ry);
-    if (ly > -AXIS_DEADZONE && ly < AXIS_DEADZONE) ly = 0;
-    if (ry > -AXIS_DEADZONE && ry < AXIS_DEADZONE) ry = 0;
+    if (ly > -AXIS_DEADZONE && ly < AXIS_DEADZONE)
+        ly = 0;
+    if (ry > -AXIS_DEADZONE && ry < AXIS_DEADZONE)
+        ry = 0;
     rctank_motor_left_track_set(-ly);
     rctank_motor_right_track_set(-ry);
 
     /* 터렛: D-PAD 좌우 */
     int32_t turret = 0;
-    if (gp->dpad & DPAD_LEFT)  turret = -400;
-    if (gp->dpad & DPAD_RIGHT) turret = 400;
+    if (gp->dpad & DPAD_LEFT)
+        turret = -400;
+    if (gp->dpad & DPAD_RIGHT)
+        turret = 400;
     rctank_motor_turret_set(turret);
 
     /* 포 마운트: D-PAD 상하 75~135도 */
     if (gp->dpad & DPAD_UP) {
         mount_angle += MOUNT_DEG_STEP;
-        if (mount_angle > RCTANK_SERVO_MOUNT_DEG_MAX) mount_angle = RCTANK_SERVO_MOUNT_DEG_MAX;
+        if (mount_angle > RCTANK_SERVO_MOUNT_DEG_MAX)
+            mount_angle = RCTANK_SERVO_MOUNT_DEG_MAX;
         rctank_servo_mount_set_degree(mount_angle);
     }
     if (gp->dpad & DPAD_DOWN) {
         mount_angle -= MOUNT_DEG_STEP;
-        if (mount_angle < RCTANK_SERVO_MOUNT_DEG_MIN) mount_angle = RCTANK_SERVO_MOUNT_DEG_MIN;
+        if (mount_angle < RCTANK_SERVO_MOUNT_DEG_MIN)
+            mount_angle = RCTANK_SERVO_MOUNT_DEG_MIN;
         rctank_servo_mount_set_degree(mount_angle);
     }
 
@@ -358,14 +351,12 @@ static void my_platform_on_controller_data(uni_hid_device_t* d, uni_controller_t
     prev_misc = gp->misc_buttons;
 }
 
-static const uni_property_t* my_platform_get_property(uni_property_idx_t idx)
-{
+static const uni_property_t* my_platform_get_property(uni_property_idx_t idx) {
     ARG_UNUSED(idx);
     return NULL;
 }
 
-static void my_platform_on_oob_event(uni_platform_oob_event_t event, void* data)
-{
+static void my_platform_on_oob_event(uni_platform_oob_event_t event, void* data) {
     switch (event) {
         case UNI_PLATFORM_OOB_GAMEPAD_SYSTEM_BUTTON: {
             uni_hid_device_t* d = data;
@@ -387,13 +378,11 @@ static void my_platform_on_oob_event(uni_platform_oob_event_t event, void* data)
     }
 }
 
-static my_platform_instance_t* get_my_platform_instance(uni_hid_device_t* d)
-{
+static my_platform_instance_t* get_my_platform_instance(uni_hid_device_t* d) {
     return (my_platform_instance_t*)&d->platform_data[0];
 }
 
-static void trigger_event_on_gamepad(uni_hid_device_t* d)
-{
+static void trigger_event_on_gamepad(uni_hid_device_t* d) {
     my_platform_instance_t* ins = get_my_platform_instance(d);
     if (d->report_parser.play_dual_rumble != NULL)
         d->report_parser.play_dual_rumble(d, 0, 150, 128, 40);
@@ -407,8 +396,7 @@ static void trigger_event_on_gamepad(uni_hid_device_t* d)
     }
 }
 
-struct uni_platform* get_my_platform(void)
-{
+struct uni_platform* get_my_platform(void) {
     static struct uni_platform plat = {
         .name = "custom",
         .init = my_platform_init,

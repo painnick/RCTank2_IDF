@@ -8,28 +8,29 @@
 #include "driver/ledc.h"
 #include "esp_log.h"
 
-static const char *TAG = "rctank_servo";
+static const char* TAG = "rctank_servo";
 
-#define LEDC_TIMER              LEDC_TIMER_0
-#define LEDC_MODE               LEDC_LOW_SPEED_MODE
-#define LEDC_DUTY_RES           LEDC_TIMER_10_BIT
-#define LEDC_FREQ_HZ            50
+#define LEDC_TIMER LEDC_TIMER_0
+#define LEDC_MODE LEDC_LOW_SPEED_MODE
+#define LEDC_DUTY_RES LEDC_TIMER_10_BIT
+#define LEDC_FREQ_HZ 50
 
-#define SERVO_PULSE_MIN_US      500
-#define SERVO_PULSE_MAX_US      2500
-#define SERVO_DEGREE_RANGE      180
+#define SERVO_PULSE_MIN_US 500
+#define SERVO_PULSE_MAX_US 2500
+#define SERVO_DEGREE_RANGE 180
 
-static uint32_t degree_to_duty(int degree)
-{
-    if (degree < 0) degree = 0;
-    if (degree > SERVO_DEGREE_RANGE) degree = SERVO_DEGREE_RANGE;
-    uint32_t us = SERVO_PULSE_MIN_US + (SERVO_PULSE_MAX_US - SERVO_PULSE_MIN_US) * (uint32_t)degree / SERVO_DEGREE_RANGE;
+static uint32_t degree_to_duty(int degree) {
+    if (degree < 0)
+        degree = 0;
+    if (degree > SERVO_DEGREE_RANGE)
+        degree = SERVO_DEGREE_RANGE;
+    uint32_t us =
+        SERVO_PULSE_MIN_US + (SERVO_PULSE_MAX_US - SERVO_PULSE_MIN_US) * (uint32_t)degree / SERVO_DEGREE_RANGE;
     uint32_t max_duty = (1 << LEDC_DUTY_RES) - 1;
     return (us * LEDC_FREQ_HZ * max_duty) / 1000000;
 }
 
-esp_err_t rctank_servo_init(void)
-{
+esp_err_t rctank_servo_init(void) {
     ledc_timer_config_t timer_config = {
         .speed_mode = LEDC_MODE,
         .duty_resolution = LEDC_DUTY_RES,
@@ -72,20 +73,35 @@ esp_err_t rctank_servo_init(void)
     return ESP_OK;
 }
 
-void rctank_servo_mount_set_degree(int degree)
-{
-    if (degree < RCTANK_SERVO_MOUNT_DEG_MIN) degree = RCTANK_SERVO_MOUNT_DEG_MIN;
-    if (degree > RCTANK_SERVO_MOUNT_DEG_MAX) degree = RCTANK_SERVO_MOUNT_DEG_MAX;
+static int s_gun_degree = RCTANK_SERVO_GUN_DEG_REST;
+
+void rctank_servo_mount_set_degree(int degree) {
+    if (degree < RCTANK_SERVO_MOUNT_DEG_MIN)
+        degree = RCTANK_SERVO_MOUNT_DEG_MIN;
+    if (degree > RCTANK_SERVO_MOUNT_DEG_MAX)
+        degree = RCTANK_SERVO_MOUNT_DEG_MAX;
     uint32_t duty = degree_to_duty(degree);
     ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, duty);
     ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
 }
 
-void rctank_servo_gun_set_degree(int degree)
-{
-    if (degree < 0) degree = 0;
-    if (degree > SERVO_DEGREE_RANGE) degree = SERVO_DEGREE_RANGE;
+void rctank_servo_gun_set_degree(int degree) {
+    if (degree < 0)
+        degree = 0;
+    if (degree > SERVO_DEGREE_RANGE)
+        degree = SERVO_DEGREE_RANGE;
+    s_gun_degree = degree;
     uint32_t duty = degree_to_duty(degree);
     ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, duty);
     ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
+}
+
+void rctank_servo_gun_enable(int enable) {
+    if (enable) {
+        /* 저장된 각도로 duty 복원 */
+        rctank_servo_gun_set_degree(s_gun_degree);
+    } else {
+        /* PWM 중지 -> 서보 힘 풀림 */
+        ledc_stop(LEDC_MODE, LEDC_CHANNEL_1, 0);
+    }
 }

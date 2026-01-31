@@ -57,11 +57,22 @@ static esp_timer_handle_t mg_delayed_start_timer = NULL;
 static uni_hid_device_t* mg_delayed_device = NULL; /* 500ms 후 럼블용 */
 static int mg_led_toggle = 0;
 
+static esp_timer_handle_t gun_detach_timer = NULL;
+
+static void gun_detach_timer_cb(void* arg) {
+    (void)arg;
+    /* 서보 비활성화 (토크 해제) */
+    rctank_servo_gun_enable(false);
+}
+
 static void gun_fire_timer_cb(void* arg) {
     (void)arg;
     rctank_led_gun_set(0);
     rctank_servo_gun_set_degree(RCTANK_SERVO_GUN_DEG_REST);
 
+    /* 복귀 완료 후 서보 끄기 (500ms 후) */
+    esp_timer_stop(gun_detach_timer);
+    esp_timer_start_once(gun_detach_timer, 500 * 1000);
 }
 
 /* 포신: MP3 재생 요청 후 500ms 지난 뒤 서보/LED/럼블 시작 (DFPlayer 지연 보정) */
@@ -139,6 +150,14 @@ static void my_platform_init(int argc, const char** argv) {
         .name = "gun_fire",
     };
     esp_timer_create(&gun_timer_args, &gun_timer);
+
+    const esp_timer_create_args_t gun_detach_timer_args = {
+        .callback = &gun_detach_timer_cb,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "gun_detach",
+    };
+    esp_timer_create(&gun_detach_timer_args, &gun_detach_timer);
 
     const esp_timer_create_args_t gun_delayed_start_args = {
         .callback = &gun_delayed_start_cb,
@@ -284,6 +303,9 @@ static void my_platform_on_controller_data(uni_hid_device_t* d, uni_controller_t
     /* B: 포신 발사 (MP3 즉시 재생 요청, 500ms 후 서보/LED/럼블) */
     if (gp->buttons & BUTTON_B) {
         if (!(prev_buttons & BUTTON_B)) {
+            /* 발사 시퀀스 시작 전에 서보 연결 (토크 주입) */
+            rctank_servo_gun_enable(true);
+
             rctank_dfplayer_play(RCTANK_DFPLAYER_TRACK_GUN);
 
             gun_delayed_device = d;

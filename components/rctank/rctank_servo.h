@@ -12,12 +12,12 @@ extern "C" {
 #endif
 
 /** 포 마운트 각도 범위 (README: 75~135도) */
-#define RCTANK_SERVO_MOUNT_DEG_MIN   75
-#define RCTANK_SERVO_MOUNT_DEG_MAX   135
-#define RCTANK_SERVO_MOUNT_DEG_DEF   90
+#define RCTANK_SERVO_MOUNT_DEG_MIN 75
+#define RCTANK_SERVO_MOUNT_DEG_MAX 135
+#define RCTANK_SERVO_MOUNT_DEG_DEF 90
 
 /** 포신 서보 기본 각도 (당기기 전) */
-#define RCTANK_SERVO_GUN_DEG_REST    90
+#define RCTANK_SERVO_GUN_DEG_REST 90
 
 esp_err_t rctank_servo_init(void);
 
@@ -32,6 +32,12 @@ void rctank_servo_mount_set_degree(int degree);
  * @param degree 0~180, 기본 90
  */
 void rctank_servo_gun_set_degree(int degree);
+
+/**
+ * @brief 포신 서보 활성화/비활성화
+ * @param enable true: 활성화(토크 유지), false: 비활성화(풀림)
+ */
+void rctank_servo_gun_enable(int enable);
 
 #ifdef __cplusplus
 }

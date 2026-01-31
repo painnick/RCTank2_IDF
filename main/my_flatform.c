@@ -178,10 +178,7 @@ static void my_platform_on_init_complete(void)
     logi("custom: on_init_complete()\n");
     uni_bt_start_scanning_and_autoconnect_unsafe();
     uni_bt_allow_incoming_connections(true);
-    if (1)
-        uni_bt_del_keys_unsafe();
-    else
-        uni_bt_list_keys_unsafe();
+    /* 저장된 페어링 정보 유지 → 다음 연결 시 빠른 자동 재연결 (uni_bt_del_keys_unsafe 호출 안 함) */
 }
 
 static uni_error_t my_platform_on_device_discovered(bd_addr_t addr, const char* name, uint16_t cod, uint8_t rssi)

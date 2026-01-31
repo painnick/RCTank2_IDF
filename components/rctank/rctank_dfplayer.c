@@ -27,6 +27,8 @@ static const char *TAG = "rctank_dfplayer";
 /* 제어 명령 (Control Command Values) */
 #define DFPLAYER_CMD_PLAY           0x03
 #define DFPLAYER_CMD_VOLUME         0x06
+#define DFPLAYER_CMD_PLAYBACK_MODE  0x08   /* 루프 재생 (param = 트랙 번호) */
+#define DFPLAYER_CMD_REPEAT_PLAY    0x11   /* 반복 재생 제어 (0x00=중지) */
 #define DFPLAYER_CMD_STOP           0x16
 #define DFPLAYER_CMD_USE_MP3_FOLDER 0x12
 #define DFPLAYER_CMD_INSERT_ADVERT  0x13
@@ -130,6 +132,13 @@ esp_err_t rctank_dfplayer_play(uint8_t track)
     return dfplayer_send_cmd(DFPLAYER_CMD_PLAY, (uint8_t)((uint16_t)track >> 8), (uint8_t)(track & 0xFF));
 }
 
+esp_err_t rctank_dfplayer_play_loop(uint8_t track)
+{
+    if (track < 1) return ESP_ERR_INVALID_ARG;
+    /* PLAYBACK_MODE(0x08): param = 트랙 번호 → 해당 트랙 반복 재생 (DFPlayerMini_Fast loop) */
+    return dfplayer_send_cmd(DFPLAYER_CMD_PLAYBACK_MODE, (uint8_t)((uint16_t)track >> 8), (uint8_t)(track & 0xFF));
+}
+
 esp_err_t rctank_dfplayer_set_volume(uint8_t vol)
 {
     if (vol > 30) vol = 30;
@@ -141,4 +150,16 @@ esp_err_t rctank_dfplayer_stop(void)
 {
     /* STOP(0x16): param 0, 0 */
     return dfplayer_send_cmd(DFPLAYER_CMD_STOP, 0x00, 0x00);
+}
+
+esp_err_t rctank_dfplayer_stop_repeat(void)
+{
+    /* REPEAT_PLAY(0x11) STOP_REPEAT(0x00): 루프 해제 → 다음 play()는 1회만 재생 */
+    uint8_t buf[DFPLAYER_STACK_SIZE] = {0x7E, 0xFF, 0x06, 0x11, 0x00, 0x00, 0x00, 0xFE, 0xE9, 0xEF};
+    int n = uart_write_bytes(UART_NUM, buf, DFPLAYER_STACK_SIZE);
+    if (n != DFPLAYER_STACK_SIZE) {
+        ESP_LOGE(TAG, "uart_write_bytes %d", n);
+        return ESP_FAIL;
+    }
+    return ESP_OK;
 }

@@ -18,14 +18,20 @@ extern "C" {
 
 esp_err_t rctank_dfplayer_init(void);
 
-/** 트랙 재생 (1~4 등) */
+/** 트랙 재생 (1회) */
 esp_err_t rctank_dfplayer_play(uint8_t track);
+
+/** 트랙 반복 재생 (끝나면 처음부터 반복, IDLE용) */
+esp_err_t rctank_dfplayer_play_loop(uint8_t track);
 
 /** 볼륨 설정 (0~30) */
 esp_err_t rctank_dfplayer_set_volume(uint8_t vol);
 
 /** 재생 중지 */
 esp_err_t rctank_dfplayer_stop(void);
+
+/** 루프/반복 모드 해제 (연결음 등 1회 재생 전 호출) */
+esp_err_t rctank_dfplayer_stop_repeat(void);
 
 #ifdef __cplusplus
 }

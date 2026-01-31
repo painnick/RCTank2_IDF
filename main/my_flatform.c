@@ -179,6 +179,16 @@ static void my_platform_on_init_complete(void)
     uni_bt_start_scanning_and_autoconnect_unsafe();
     uni_bt_allow_incoming_connections(true);
     /* 저장된 페어링 정보 유지 → 다음 연결 시 빠른 자동 재연결 (uni_bt_del_keys_unsafe 호출 안 함) */
+
+
+    esp_err_t ret = rctank_dfplayer_init();
+    if (ret != ESP_OK) return;
+
+    uint8_t vol = rctank_storage_volume_get();
+    rctank_dfplayer_set_volume(vol);
+    vTaskDelay(pdMS_TO_TICKS(200));
+
+    rctank_dfplayer_play(RCTANK_DFPLAYER_TRACK_IDLE);
 }
 
 static uni_error_t my_platform_on_device_discovered(bd_addr_t addr, const char* name, uint16_t cod, uint8_t rssi)
@@ -212,6 +222,12 @@ static uni_error_t my_platform_on_device_ready(uni_hid_device_t* d)
     logi("custom: device ready: %p\n", d);
     my_platform_instance_t* ins = get_my_platform_instance(d);
     ins->gamepad_seat = GAMEPAD_SEAT_A;
+
+    // rctank_dfplayer_stop();
+    // vTaskDelay(pdMS_TO_TICKS(100));
+
+    // rctank_dfplayer_stop_repeat();
+    // vTaskDelay(pdMS_TO_TICKS(200));
 
     rctank_dfplayer_play(RCTANK_DFPLAYER_TRACK_CONNECT);
     trigger_event_on_gamepad(d);

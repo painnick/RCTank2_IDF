@@ -33,16 +33,6 @@ esp_err_t rctank_init(void)
     ret = rctank_motor_init();
     if (ret != ESP_OK) return ret;
 
-    ret = rctank_dfplayer_init();
-    if (ret != ESP_OK) return ret;
-
-    uint8_t vol = rctank_storage_volume_get();
-    rctank_dfplayer_set_volume(vol);
-    vTaskDelay(pdMS_TO_TICKS(200));
-
-    rctank_dfplayer_play(RCTANK_DFPLAYER_TRACK_IDLE);
-    vTaskDelay(pdMS_TO_TICKS(200));
-
-    ESP_LOGI(TAG, "rctank init complete (vol=%u)", (unsigned)vol);
+    ESP_LOGI(TAG, "rctank init complete");
     return ESP_OK;
 }

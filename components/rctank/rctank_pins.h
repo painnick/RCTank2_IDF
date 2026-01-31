@@ -14,6 +14,7 @@ extern "C" {
 /* LED */
 #define RCTANK_PIN_GUN_LED      (GPIO_NUM_4)
 #define RCTANK_PIN_HEADLIGHT    (GPIO_NUM_16)
+#define RCTANK_PIN_MG_LED       (GPIO_NUM_23)   /* 기관총 LED (A 버튼, 1초간 깜빡임) */
 
 /* 좌측 트랙 DRV8833 (AIN1, AIN2) */
 #define RCTANK_PIN_LEFT_IN1     (GPIO_NUM_25)

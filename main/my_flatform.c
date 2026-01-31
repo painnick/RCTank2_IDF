@@ -24,6 +24,9 @@
 #define MOUNT_DEG_STEP          3
 #define DEBOUNCE_MS             100
 #define GUN_FIRE_MS             200
+#define MG_FIRE_MS              1000   /* 기관총 발사 시간 (LED 깜빡임) */
+#define MG_LED_BLINK_MS         100    /* 기관총 LED 깜빡임 주기 */
+#define MG_DELAY_MS             500    /* MP3 재생 요청 후 LED/럼블 지연 (DFPlayer 지연 보정) */
 #define SELECT_START_HOLD_MS    3000
 
 typedef struct my_platform_instance_s {
@@ -42,6 +45,11 @@ static uint8_t prev_buttons = 0;
 static uint8_t prev_misc = 0;
 static esp_timer_handle_t gun_timer = NULL;
 static esp_timer_handle_t restart_timer = NULL;
+static esp_timer_handle_t mg_blink_timer = NULL;
+static esp_timer_handle_t mg_stop_timer = NULL;
+static esp_timer_handle_t mg_delayed_start_timer = NULL;
+static uni_hid_device_t* mg_delayed_device = NULL;  /* 500ms 후 럼블용 */
+static int mg_led_toggle = 0;
 
 static void gun_fire_timer_cb(void* arg)
 {
@@ -54,6 +62,36 @@ static void delayed_restart_cb(void* arg)
 {
     (void)arg;
     rctank_storage_erase_and_restart();
+}
+
+static void mg_blink_timer_cb(void* arg)
+{
+    (void)arg;
+    mg_led_toggle = !mg_led_toggle;
+    rctank_led_mg_set(mg_led_toggle);
+}
+
+static void mg_stop_timer_cb(void* arg)
+{
+    (void)arg;
+    esp_timer_stop(mg_blink_timer);
+    rctank_led_mg_set(0);
+}
+
+/* MP3 재생 요청 후 500ms 지난 뒤 LED 깜빡임 + 럼블 시작 (DFPlayer 지연 보정) */
+static void mg_delayed_start_cb(void* arg)
+{
+    (void)arg;
+    uni_hid_device_t* d = mg_delayed_device;
+    mg_delayed_device = NULL;
+    if (d != NULL && d->report_parser.play_dual_rumble != NULL)
+        d->report_parser.play_dual_rumble(d, 0, 300, 150, 200);
+    esp_timer_stop(mg_blink_timer);
+    esp_timer_stop(mg_stop_timer);
+    mg_led_toggle = 0;
+    rctank_led_mg_set(1);
+    esp_timer_start_periodic(mg_blink_timer, MG_LED_BLINK_MS * 1000);
+    esp_timer_start_once(mg_stop_timer, MG_FIRE_MS * 1000);
 }
 
 static void my_platform_init(int argc, const char** argv)
@@ -83,6 +121,30 @@ static void my_platform_init(int argc, const char** argv)
         .name = "restart",
     };
     esp_timer_create(&restart_timer_args, &restart_timer);
+
+    const esp_timer_create_args_t mg_blink_args = {
+        .callback = &mg_blink_timer_cb,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "mg_blink",
+    };
+    esp_timer_create(&mg_blink_args, &mg_blink_timer);
+
+    const esp_timer_create_args_t mg_stop_args = {
+        .callback = &mg_stop_timer_cb,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "mg_stop",
+    };
+    esp_timer_create(&mg_stop_args, &mg_stop_timer);
+
+    const esp_timer_create_args_t mg_delayed_start_args = {
+        .callback = &mg_delayed_start_cb,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "mg_delayed",
+    };
+    esp_timer_create(&mg_delayed_start_args, &mg_delayed_start_timer);
 }
 
 static void my_platform_on_init_complete(void)
@@ -189,12 +251,13 @@ static void my_platform_on_controller_data(uni_hid_device_t* d, uni_controller_t
         }
     }
 
-    /* A: 기관총 (LED 없음 + 효과음 3, 진동 300ms) */
+    /* A: 기관총 (MP3 즉시 재생 요청, 500ms 후 LED 깜빡임 + 럼블) */
     if (gp->buttons & BUTTON_A) {
         if (!(prev_buttons & BUTTON_A)) {
             rctank_dfplayer_play(RCTANK_DFPLAYER_TRACK_MG);
-            if (d->report_parser.play_dual_rumble != NULL)
-                d->report_parser.play_dual_rumble(d, 0, 300, 150, 200);
+            mg_delayed_device = d;
+            esp_timer_stop(mg_delayed_start_timer);
+            esp_timer_start_once(mg_delayed_start_timer, MG_DELAY_MS * 1000);
         }
     }
 

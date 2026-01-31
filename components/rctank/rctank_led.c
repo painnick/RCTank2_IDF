@@ -14,7 +14,8 @@ static int headlight_on = 0;
 esp_err_t rctank_led_init(void)
 {
     gpio_config_t io = {
-        .pin_bit_mask = (1ULL << RCTANK_PIN_GUN_LED) | (1ULL << RCTANK_PIN_HEADLIGHT),
+        .pin_bit_mask = (1ULL << RCTANK_PIN_GUN_LED) | (1ULL << RCTANK_PIN_HEADLIGHT)
+                        | (1ULL << RCTANK_PIN_MG_LED),
         .mode = GPIO_MODE_OUTPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
@@ -27,6 +28,7 @@ esp_err_t rctank_led_init(void)
     }
     gpio_set_level(RCTANK_PIN_GUN_LED, 0);
     gpio_set_level(RCTANK_PIN_HEADLIGHT, 0);
+    gpio_set_level(RCTANK_PIN_MG_LED, 0);
     headlight_on = 0;
     ESP_LOGI(TAG, "led init ok");
     return ESP_OK;
@@ -35,6 +37,11 @@ esp_err_t rctank_led_init(void)
 void rctank_led_gun_set(int on)
 {
     gpio_set_level(RCTANK_PIN_GUN_LED, on ? 1 : 0);
+}
+
+void rctank_led_mg_set(int on)
+{
+    gpio_set_level(RCTANK_PIN_MG_LED, on ? 1 : 0);
 }
 
 void rctank_led_headlight_set(int on)

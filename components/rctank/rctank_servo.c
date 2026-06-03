@@ -73,6 +73,7 @@ esp_err_t rctank_servo_init(void) {
     return ESP_OK;
 }
 
+static int s_mount_degree = RCTANK_SERVO_MOUNT_DEG_DEF;
 static int s_gun_degree = RCTANK_SERVO_GUN_DEG_REST;
 
 void rctank_servo_mount_set_degree(int degree) {
@@ -80,6 +81,7 @@ void rctank_servo_mount_set_degree(int degree) {
         degree = RCTANK_SERVO_MOUNT_DEG_MIN;
     if (degree > RCTANK_SERVO_MOUNT_DEG_MAX)
         degree = RCTANK_SERVO_MOUNT_DEG_MAX;
+    s_mount_degree = degree;
     uint32_t duty = degree_to_duty(degree);
     ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, duty);
     ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
@@ -101,7 +103,19 @@ void rctank_servo_gun_enable(int enable) {
         /* 저장된 각도로 duty 복원 */
         rctank_servo_gun_set_degree(s_gun_degree);
     } else {
-        /* PWM 중지 -> 서보 힘 풀림 */
-        ledc_stop(LEDC_MODE, LEDC_CHANNEL_1, 0);
+        /* duty를 0으로 설정하여 서보 힘 풀기 (ledc_stop 사용 시 BT 스택 충돌 방지) */
+        ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, 0);
+        ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
+    }
+}
+
+void rctank_servo_mount_enable(int enable) {
+    if (enable) {
+        /* 저장된 각도로 duty 복원 */
+        rctank_servo_mount_set_degree(s_mount_degree);
+    } else {
+        /* duty를 0으로 설정하여 서보 힘 풀기 (ledc_stop 사용 시 BT 스택 충돌 방지) */
+        ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, 0);
+        ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
     }
 }

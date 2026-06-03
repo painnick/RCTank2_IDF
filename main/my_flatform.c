@@ -13,6 +13,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "esp_bt.h"
 #include "rctank.h"
 #include "rctank_dfplayer.h"
 #include "rctank_led.h"
@@ -47,6 +48,9 @@ static int64_t select_start_pressed_at = 0;
 static int64_t recoil_end_time = 0; /* 반동 종료 시간 */
 static uint8_t prev_buttons = 0;
 static uint8_t prev_misc = 0;
+static uint8_t prev_dpad = 0;
+static bool mount_servo_enabled = true;
+static int64_t last_dpad_ms = 0;
 static esp_timer_handle_t gun_timer = NULL;
 static esp_timer_handle_t gun_delayed_start_timer = NULL;
 static uni_hid_device_t* gun_delayed_device = NULL; /* 500ms 후 럼블용 */
@@ -58,6 +62,13 @@ static uni_hid_device_t* mg_delayed_device = NULL; /* 500ms 후 럼블용 */
 static int mg_led_toggle = 0;
 
 static esp_timer_handle_t gun_detach_timer = NULL;
+static esp_timer_handle_t mount_detach_timer = NULL;
+
+static void mount_detach_timer_cb(void* arg) {
+    (void)arg;
+    rctank_servo_mount_enable(false);
+    mount_servo_enabled = false;
+}
 
 static void gun_detach_timer_cb(void* arg) {
     (void)arg;
@@ -198,10 +209,20 @@ static void my_platform_init(int argc, const char** argv) {
         .name = "mg_delayed",
     };
     esp_timer_create(&mg_delayed_start_args, &mg_delayed_start_timer);
+
+    const esp_timer_create_args_t mount_detach_timer_args = {
+        .callback = &mount_detach_timer_cb,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "mount_detach",
+    };
+    esp_timer_create(&mount_detach_timer_args, &mount_detach_timer);
 }
 
 static void my_platform_on_init_complete(void) {
     logi("custom: on_init_complete()\n");
+    /* 블루투스 컨트롤러 슬립 비활성화하여 rwbt.c ASSERT_PARAM 크래시 방지 */
+    esp_bt_sleep_disable();
     uni_bt_start_scanning_and_autoconnect_unsafe();
     uni_bt_allow_incoming_connections(true);
     /* 저장된 페어링 정보 유지 → 다음 연결 시 빠른 자동 재연결 (uni_bt_del_keys_unsafe 호출 안 함) */
@@ -215,6 +236,9 @@ static void my_platform_on_init_complete(void) {
     vTaskDelay(pdMS_TO_TICKS(200));
 
     rctank_dfplayer_play(RCTANK_DFPLAYER_TRACK_IDLE);
+
+    /* 2초 후 포 마운트 서보 자동 비활성화 */
+    esp_timer_start_once(mount_detach_timer, 2000 * 1000);
 }
 
 static uni_error_t my_platform_on_device_discovered(bd_addr_t addr, const char* name, uint16_t cod, uint8_t rssi) {
@@ -287,17 +311,37 @@ static void my_platform_on_controller_data(uni_hid_device_t* d, uni_controller_t
     rctank_motor_turret_set(turret);
 
     /* 포 마운트: D-PAD 상하 75~135도 */
-    if (gp->dpad & DPAD_UP) {
-        mount_angle += MOUNT_DEG_STEP;
-        if (mount_angle > RCTANK_SERVO_MOUNT_DEG_MAX)
-            mount_angle = RCTANK_SERVO_MOUNT_DEG_MAX;
-        rctank_servo_mount_set_degree(mount_angle);
-    }
-    if (gp->dpad & DPAD_DOWN) {
-        mount_angle -= MOUNT_DEG_STEP;
-        if (mount_angle < RCTANK_SERVO_MOUNT_DEG_MIN)
-            mount_angle = RCTANK_SERVO_MOUNT_DEG_MIN;
-        rctank_servo_mount_set_degree(mount_angle);
+    bool dpad_mount_active = (gp->dpad & (DPAD_UP | DPAD_DOWN)) != 0;
+    bool prev_dpad_mount_active = (prev_dpad & (DPAD_UP | DPAD_DOWN)) != 0;
+
+    if (dpad_mount_active) {
+        if (!mount_servo_enabled) {
+            rctank_servo_mount_enable(true);
+            mount_servo_enabled = true;
+        }
+        if (!prev_dpad_mount_active) {
+            esp_timer_stop(mount_detach_timer);
+        }
+
+        if (now_ms - last_dpad_ms >= 50) { // 50ms마다 각도 갱신하여 100Hz 타이머/LEDC 리소스 낭비 및 밀림 방지
+            last_dpad_ms = now_ms;
+            if (gp->dpad & DPAD_UP) {
+                mount_angle += MOUNT_DEG_STEP;
+                if (mount_angle > RCTANK_SERVO_MOUNT_DEG_MAX)
+                    mount_angle = RCTANK_SERVO_MOUNT_DEG_MAX;
+                rctank_servo_mount_set_degree(mount_angle);
+            }
+            if (gp->dpad & DPAD_DOWN) {
+                mount_angle -= MOUNT_DEG_STEP;
+                if (mount_angle < RCTANK_SERVO_MOUNT_DEG_MIN)
+                    mount_angle = RCTANK_SERVO_MOUNT_DEG_MIN;
+                rctank_servo_mount_set_degree(mount_angle);
+            }
+        }
+    } else if (prev_dpad_mount_active) {
+        /* 버튼을 뗐을 때 2초 타이머 시작 (한 번만 설정) */
+        esp_timer_stop(mount_detach_timer);
+        esp_timer_start_once(mount_detach_timer, 2000 * 1000);
     }
 
     /* B: 포신 발사 (MP3 즉시 재생 요청, 500ms 후 서보/LED/럼블) */
@@ -383,6 +427,7 @@ static void my_platform_on_controller_data(uni_hid_device_t* d, uni_controller_t
 
     prev_buttons = gp->buttons;
     prev_misc = gp->misc_buttons;
+    prev_dpad = gp->dpad;
 }
 
 static const uni_property_t* my_platform_get_property(uni_property_idx_t idx) {

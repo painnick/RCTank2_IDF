@@ -39,6 +39,12 @@ void rctank_servo_gun_set_degree(int degree);
  */
 void rctank_servo_gun_enable(int enable);
 
+/**
+ * @brief 포 마운트 서보 활성화/비활성화
+ * @param enable true: 활성화(토크 유지), false: 비활성화(풀림)
+ */
+void rctank_servo_mount_enable(int enable);
+
 #ifdef __cplusplus
 }
 #endif
